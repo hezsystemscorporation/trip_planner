@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能旅行行程规划</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* 拖拽时的样式 */
+        .dragging {
+            opacity: 0.5;
+            border: 2px dashed #3b82f6;
+        }
+        .drop-zone {
+            transition: all 0.2s;
+        }
+        .drop-zone.drag-over {
+            background-color: #eff6ff;
+            border-color: #3b82f6;
+        }
+        
+        /* 隐藏原生时间选择器的清除按钮，保持UI整洁 */
+        input[type="time"]::-webkit-clear-button {
+            display: none;
+        }
+
+        /* 打印样式 (导出为PDF时使用) */
+        @media print {
+            body {
+                background-color: white !important;
+                color: black !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .print-full-width {
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .shadow-md, .shadow-sm {
+                box-shadow: none !important;
+                border: 1px solid #e5e7eb !important;
+            }
+            /* 强制背景色打印 */
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .print-page-break {
+                page-break-inside: avoid;
+            }
+            .print-header {
+                display: block !important;
+                text-align: center;
+                font-size: 24px;
+                font-weight: bold;
+                margin-bottom: 20px;
+                border-bottom: 2px solid #000;
+                padding-bottom: 10px;
+            }
+            /* 将输入框转换为纯文本展示 */
+            input, select, textarea {
+                border: none !important;
+                background: transparent !important;
+                resize: none !important;
+                padding: 0 !important;
+                font-weight: inherit !important;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+            }
+        }
+        
+        .print-header { display: none; }
+        
+        /* 撤销提示框动画 */
+        @keyframes slideInUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .toast-enter {
+            animation: slideInUp 0.3s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col font-sans">
+
+    <!-- 导航栏 -->
+    <nav class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center no-print">
+        <h1 class="text-xl font-bold"><i class="fas fa-map-marked-alt mr-2"></i>智能旅行规划系统</h1>
+        <div class="space-x-4">
+            <button onclick="document.getElementById('xmlUpload').click()" class="bg-blue-500 hover:bg-blue-400 px-4 py-2 rounded text-sm transition">
+                <i class="fas fa-file-import mr-1"></i> 导入XML景点
+            </button>
+            <input type="file" id="xmlUpload" accept=".xml" class="hidden" onchange="importXML(event)">
+            
+            <button onclick="exportXML()" class="bg-indigo-500 hover:bg-indigo-400 px-4 py-2 rounded text-sm transition shadow-sm">
+                <i class="fas fa-file-export mr-1"></i> 导出规划(XML)
+            </button>
+
+            <button onclick="window.print()" class="bg-white text-blue-600 hover:bg-gray-100 px-4 py-2 rounded text-sm font-bold transition shadow">
+                <i class="fas fa-file-pdf mr-1"></i> 导出 PDF
+            </button>
+        </div>
+    </nav>
+
+    <div class="print-header">我的旅行行程规划</div>
+
+    <!-- 主体内容 -->
+    <div class="flex flex-1 overflow-hidden p-4 gap-6 print-full-width">
+        
+        <!-- 左侧：景点池 (非打印区域) -->
+        <div class="w-1/3 flex flex-col bg-white rounded-lg shadow-md overflow-hidden no-print">
+            <div class="p-4 bg-gray-50 border-b flex justify-between items-center">
+                <h2 class="text-lg font-bold text-gray-700">📌 行程池 (可拖拽)</h2>
+                <button onclick="exportPoolXML()" class="text-blue-600 hover:bg-blue-100 px-2 py-1 rounded text-sm transition" title="仅导出当前景点/餐饮池列表">
+                    <i class="fas fa-download mr-1"></i>导出池
+                </button>
+            </div>
+            
+            <!-- 手动录入表单 -->
+            <div class="p-4 border-b bg-gray-50">
+                <form id="addPoolForm" class="space-y-3" onsubmit="addPoolItem(event)">
+                    <div class="flex gap-2">
+                        <select id="p_type" class="w-20 p-2 border rounded text-sm focus:outline-blue-500 bg-white">
+                            <option value="attraction">景点</option>
+                            <option value="restaurant">餐饮</option>
+                        </select>
+                        <input type="text" id="p_name" placeholder="名称" required class="flex-1 p-2 border rounded text-sm focus:outline-blue-500">
+                        <input type="text" id="p_city" placeholder="城市" required class="w-20 p-2 border rounded text-sm focus:outline-blue-500">
+                    </div>
+                    <div class="flex gap-2 items-center">
+                        <input type="number" id="p_time" placeholder="推荐游玩(分钟)" required min="1" class="flex-1 p-2 border rounded text-sm focus:outline-blue-500">
+                        <button type="submit" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded text-sm transition">添加</button>
+                    </div>
+                    <input type="text" id="p_desc" placeholder="条目描述 (可选)" class="w-full p-2 border rounded text-sm focus:outline-blue-500">
+                </form>
+            </div>
+
+            <!-- 景点列表 -->
+            <div id="poolContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <!-- 动态生成景点卡片 -->
+            </div>
+        </div>
+
+        <!-- 右侧：行程规划 (打印区域主干) -->
+        <div class="w-2/3 flex flex-col bg-white rounded-lg shadow-md overflow-hidden print-full-width">
+            <div class="p-4 bg-gray-50 border-b flex justify-between items-center no-print">
+                <h2 class="text-lg font-bold text-gray-700">🗓️ 行程安排</h2>
+                <button onclick="addDay()" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded text-sm transition shadow-sm">
+                    <i class="fas fa-plus mr-1"></i> 新增一天
+                </button>
+            </div>
+            
+            <div id="itineraryContainer" class="flex-1 overflow-y-auto p-4 space-y-6">
+                <!-- 动态生成天数和行程 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ---------------- 状态管理 ----------------
+        
+        // 景点池数据
+        let pool = [
+            // --- 珠海市景点与美食 ---
+            { id: 'zh1', type: 'attraction', name: '横琴花海长廊', city: '珠海', recTime: 240, desc: '自然景观。11-12月异木棉盛花期。建议预留3-4小时。' },
+            { id: 'zh2', type: 'attraction', name: '大万山岛/东澳岛', city: '珠海', recTime: 600, desc: '自然景观、休闲度假。秋末冬初黄金时段。建议预留完整一至两天。' },
+            { id: 'zh3', type: 'attraction', name: '桂山岛', city: '珠海', recTime: 240, desc: '海岛风光、传统渔村风情。秋季气候最佳。' },
+            { id: 'zh4', type: 'attraction', name: '外伶仃岛', city: '珠海', recTime: 240, desc: '地质奇观与矿石湖。秋季适宜。建议3-5小时。' },
+            { id: 'zh5', type: 'attraction', name: '淇澳岛', city: '珠海', recTime: 360, desc: '红树林湿地、抗英遗址白石街。建议大半天至一天。' },
+            { id: 'zh6', type: 'attraction', name: '梅溪牌坊旅游区', city: '珠海', recTime: 180, desc: '人文景观，古典建筑、近代庄园叙事。建议约3小时。' },
+            { id: 'zh7', type: 'attraction', name: '黄杨山(金台寺)', city: '珠海', recTime: 120, desc: '自然与宗教景观，适合白天登高静心。' },
+            { id: 'zh8', type: 'attraction', name: '北山大院', city: '珠海', recTime: 90, desc: '历史古村落有机更新，网红探店打卡。' },
+            { id: 'zh9', type: 'attraction', name: '景山公园', city: '珠海', recTime: 60, desc: '俯瞰城市天际线，索道滑道极速体验。' },
+            { id: 'zh10', type: 'attraction', name: '长隆旅游度假区', city: '珠海', recTime: 600, desc: '超级主题乐园、海洋动物。需预留一整天。' },
+            { id: 'zh11', type: 'attraction', name: '沿海观光带(日月贝)', city: '珠海', recTime: 60, desc: '城市地标。日落后的半小时蓝调时刻最佳。' },
+            { id: 'zh12', type: 'attraction', name: '夏湾夜市', city: '珠海', recTime: 90, desc: '珠海夜生活，暗夜市井小吃。21:30起步。' },
+            { id: 'zh13', type: 'attraction', name: '斗门莲洲镇乡村', city: '珠海', recTime: 300, desc: '农旅融合，体验深度乡野慢生活。' },
+            { id: 'zhf1', type: 'restaurant', name: '金悦轩/协成', city: '珠海', recTime: 90, desc: '美食：粤式高端海鲜与创新茶点。' },
+            { id: 'zhf2', type: 'restaurant', name: '颓记/渔记茶餐厅', city: '珠海', recTime: 60, desc: '美食：港澳交融的市井茶餐厅。' },
+            { id: 'zhf3', type: 'restaurant', name: '叠石海鲜总店', city: '珠海', recTime: 90, desc: '美食：本土沿海海鲜大排档。' },
+            { id: 'zhf4', type: 'restaurant', name: '大赤坎叉烧', city: '珠海', recTime: 60, desc: '美食：非遗传统荔枝柴明火烤制。' },
+            
+            // --- 广州市景点与美食 ---
+            { id: 'gz1', type: 'attraction', name: '华南国家植物园', city: '广州', recTime: 240, desc: '生态系统景观。初春至暮春赏花。3-5小时。' },
+            { id: 'gz2', type: 'attraction', name: '白云山风景名胜区', city: '广州', recTime: 240, desc: '自然景观。白云飞索、登高望远。3-5小时。' },
+            { id: 'gz3', type: 'attraction', name: '海珠湿地公园', city: '广州', recTime: 240, desc: '水乡生态系统与候鸟栖息地。建议3-5小时。' },
+            { id: 'gz4', type: 'attraction', name: '莲花山旅游区', city: '广州', recTime: 90, desc: '古采石场遗址地质景观。夏秋避暑，1-2小时。' },
+            { id: 'gz5', type: 'attraction', name: '石门/流溪河森林公园', city: '广州', recTime: 600, desc: '森林水系，秋冬红叶/梅花。全天。' },
+            { id: 'gz6', type: 'attraction', name: '南越王博物院', city: '广州', recTime: 90, desc: '古城遗址。单馆约1.5小时。17:00停止进场。' },
+            { id: 'gz7', type: 'attraction', name: '沙面岛', city: '广州', recTime: 120, desc: '欧洲古典主义历史建筑群。傍晚及入夜最佳。' },
+            { id: 'gz8', type: 'attraction', name: '永庆坊', city: '广州', recTime: 120, desc: '非遗手工、建筑文化，含粤剧艺术博物馆。' },
+            { id: 'gz9', type: 'attraction', name: '长隆野生动物世界', city: '广州', recTime: 600, desc: '沉浸式生态休闲。全天运营，尽早入园。' },
+            { id: 'gz10', type: 'attraction', name: '广州塔', city: '广州', recTime: 180, desc: '垂直娱乐体验。建议16:00-18:00观赏日落夜景。' },
+            { id: 'gz11', type: 'attraction', name: '北京路/上下九', city: '广州', recTime: 120, desc: '特色商业街区，探店打卡与夜生活。' },
+            { id: 'gz12', type: 'attraction', name: '珠江夜游', city: '广州', recTime: 75, desc: '傍晚游船，都市观光。约60-80分钟。' },
+            { id: 'gz13', type: 'attraction', name: '小洲村/溪头村', city: '广州', recTime: 240, desc: '岭南水乡/艺术村落与田园治愈。' },
+            { id: 'gzf1', type: 'restaurant', name: '吴财记面家', city: '广州', recTime: 60, desc: '美食：西关市井风味，招牌竹升面/炸云吞。' },
+            { id: 'gzf2', type: 'restaurant', name: '广州酒家/泮溪酒家', city: '广州', recTime: 90, desc: '美食：顶级老字号酒家与园林宴饮。' },
+            { id: 'gzf3', type: 'restaurant', name: '向群饭店', city: '广州', recTime: 90, desc: '美食：传统粤式排档，镬气十足。' }
+        ];
+
+        // 行程数据
+        let days = [
+            { id: 1, items: [] }
+        ];
+        
+        let dayCounter = 1;
+        let draggedItem = null;
+        let draggedSource = null;
+        let draggedItineraryItem = null;
+        let toastTimeout = null;
+
+        // ---------------- 工具函数 ----------------
+        
+        const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
+        
+        // 时间字符串转分钟数 (例如 "09:30" -> 570)
+        const timeToMins = (timeStr) => {
+            if (!timeStr) return 0;
+            const [h, m] = timeStr.split(':').map(Number);
+            return h * 60 + m;
+        };
+
+        // 分钟数转时间字符串 (例如 570 -> "09:30")
+        const minsToTime = (mins) => {
+            const h = Math.floor(mins / 60).toString().padStart(2, '0');
+            const m = (mins % 60).toString().padStart(2, '0');
+            return `${h}:${m}`;
+        };
+
+        // XML 转义函数，防止特殊字符导致XML损坏
+        const escapeXML = (str) => {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&apos;');
+        };
+
+        // ---------------- 渲染函数 ----------------
+
+        // 检查项目是否已在行程中
+        function isItemUsed(poolId) {
+            return days.some(day => day.items.some(item => item.poolId === poolId));
+        }
+
+        function renderPool() {
+            const container = document.getElementById('poolContainer');
+            container.innerHTML = '';
+            
+            if(pool.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-400 mt-10">暂无数据，请添加或导入</div>';
+                return;
+            }
+
+            pool.forEach(item => {
+                const used = isItemUsed(item.id);
+                const el = document.createElement('div');
+                
+                if (used) {
+                    // 如果已排期，设置为灰色、半透明且不可拖拽
+                    el.className = 'bg-gray-100 border border-gray-200 p-3 rounded shadow-sm opacity-50 cursor-not-allowed';
+                    el.draggable = false;
+                } else {
+                    // 正常状态，可拖拽
+                    el.className = 'bg-white border border-gray-200 p-3 rounded shadow-sm cursor-move hover:border-blue-400 transition';
+                    el.draggable = true;
+                    
+                    // 拖拽事件
+                    el.addEventListener('dragstart', (e) => {
+                        draggedItem = item;
+                        draggedSource = 'pool';
+                        e.dataTransfer.setData('text/plain', item.id);
+                        setTimeout(() => el.classList.add('dragging'), 0);
+                    });
+                    el.addEventListener('dragend', () => {
+                        el.classList.remove('dragging');
+                        draggedItem = null;
+                        draggedSource = null;
+                    });
+                }
+                
+                el.dataset.id = item.id;
+
+                // 修复布局溢出的结构
+                el.innerHTML = `
+                    <div class="flex justify-between items-start gap-2">
+                        <div class="font-bold ${used ? 'text-gray-500' : 'text-gray-800'} flex-1 min-w-0 pr-1">
+                            ${item.type === 'restaurant' ? `<i class="fas fa-utensils ${used ? 'text-gray-400' : 'text-orange-500'} mr-1"></i>` : `<i class="fas fa-map-marker-alt ${used ? 'text-gray-400' : 'text-blue-500'} mr-1"></i>`}
+                            ${item.name} 
+                        </div>
+                        <div class="flex flex-col items-end shrink-0 gap-1 max-w-[90px]">
+                            <button onclick="removePoolItem('${item.id}')" class="text-red-400 hover:text-red-600 ${used ? 'hidden' : ''}"><i class="fas fa-times"></i></button>
+                            <span class="text-xs ${used ? 'bg-gray-200 text-gray-500' : 'bg-blue-100 text-blue-800'} px-2 py-1 rounded w-full text-center truncate" title="${item.city}">${item.city}</span>
+                            ${used ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded w-full text-center whitespace-nowrap"><i class="fas fa-check"></i> 已规划</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="text-sm ${used ? 'text-gray-400' : 'text-gray-500'} mt-1">
+                        <i class="far fa-clock"></i> 
+                        ${item.type === 'restaurant' ? '建议就餐' : '建议游玩'}: ${item.recTime} 分钟
+                    </div>
+                    ${item.desc ? `<div class="text-xs ${used ? 'text-gray-300' : 'text-gray-400'} mt-1 line-clamp-2" title="${item.desc}">${item.desc}</div>` : ''}
+                `;
+                container.appendChild(el);
+            });
+        }
+
+        function renderItinerary() {
+            const container = document.getElementById('itineraryContainer');
+            container.innerHTML = '';
+
+            days.forEach((day, index) => {
+                const dayEl = document.createElement('div');
+                dayEl.className = 'border-2 border-gray-200 rounded-lg p-4 bg-white drop-zone print-page-break';
+                dayEl.dataset.dayId = day.id;
+
+                // 拖拽目标事件
+                dayEl.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dayEl.classList.add('drag-over');
+                });
+                dayEl.addEventListener('dragleave', () => {
+                    dayEl.classList.remove('drag-over');
+                });
+                dayEl.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dayEl.classList.remove('drag-over');
+                    if (draggedItem) {
+                        if (draggedSource === 'pool') {
+                            handlePoolDrop(day.id, draggedItem, e.clientY);
+                        } else if (draggedSource === 'itinerary') {
+                            handleItineraryDrop(day.id, draggedItineraryItem, e.clientY);
+                        }
+                    }
+                });
+
+                // 排序当天的行程
+                day.items.sort((a, b) => timeToMins(a.startTime) - timeToMins(b.startTime));
+
+                let itemsHtml = day.items.length === 0 
+                    ? `<div class="text-center text-gray-400 py-6 border-2 border-dashed border-gray-200 rounded mt-2 no-print">将景点拖拽至此处，或在此添加交通/住宿</div>` 
+                    : '';
+
+                day.items.forEach(item => {
+                    itemsHtml += createItineraryItemHTML(day.id, item);
+                });
+
+                dayEl.innerHTML = `
+                    <div class="flex justify-between items-center border-b pb-2 mb-3">
+                        <h3 class="text-xl font-bold text-indigo-600 shrink-0"><i class="fas fa-calendar-day mr-2"></i>Day ${index + 1}</h3>
+                        <div class="flex gap-2 flex-wrap justify-end">
+                            <button onclick="addTransport(${day.id})" class="bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 px-3 py-1.5 rounded text-sm no-print font-medium transition"><i class="fas fa-route mr-1"></i>加交通</button>
+                            <button onclick="addAccommodation(${day.id})" class="bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 px-3 py-1.5 rounded text-sm no-print font-medium transition"><i class="fas fa-bed mr-1"></i>加住宿</button>
+                            <button onclick="removeDay(${day.id})" class="text-red-500 hover:bg-red-50 px-2 py-1.5 rounded text-sm no-print transition"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        ${itemsHtml}
+                    </div>
+                `;
+                container.appendChild(dayEl);
+            });
+            
+            // 绑定所有输入框的事件监听，以便实时验证
+            bindItemEvents();
+
+            // 绑定已规划行程的拖拽事件 (用于调整顺序或更换天数)
+            document.querySelectorAll('[data-item-id]').forEach(el => {
+                el.setAttribute('draggable', 'true');
+                el.classList.add('cursor-move');
+                
+                el.addEventListener('dragstart', (e) => {
+                    // 防止在输入框中选中文本时触发拖拽
+                    if (['input', 'textarea', 'select'].includes(e.target.tagName.toLowerCase())) {
+                        e.preventDefault();
+                        return;
+                    }
+                    
+                    const itemId = el.dataset.itemId;
+                    const dayEl = el.closest('[data-day-id]');
+                    const dayId = parseInt(dayEl.dataset.dayId);
+                    const day = days.find(d => d.id === dayId);
+                    const item = day.items.find(i => i.id === itemId);
+
+                    draggedItem = item;
+                    draggedSource = 'itinerary';
+                    draggedItineraryItem = { dayId, item };
+                    
+                    e.dataTransfer.effectAllowed = 'move';
+                    setTimeout(() => el.classList.add('dragging'), 0);
+                });
+                
+                el.addEventListener('dragend', () => {
+                    el.classList.remove('dragging');
+                    draggedItem = null;
+                    draggedSource = null;
+                    draggedItineraryItem = null;
+                });
+            });
+        }
+
+        function createItineraryItemHTML(dayId, item) {
+            // 计算验证状态
+            const validations = validateItem(dayId, item);
+            let iconHtml = '';
+            let typeColor = '';
+            let titlePrefix = '';
+            
+            // 基于类型应用不同的样式和结构
+            if (item.type === 'restaurant') { iconHtml = '<i class="fas fa-utensils text-orange-500 text-sm no-print"></i>'; typeColor = 'border-orange-400'; titlePrefix = '就餐'; }
+            else if (item.type === 'attraction') { iconHtml = '<i class="fas fa-map-marker-alt text-blue-500 text-sm no-print"></i>'; typeColor = 'border-blue-400'; titlePrefix = '游玩'; }
+            else if (item.type === 'transport') { iconHtml = '<i class="fas fa-route text-green-500 text-sm no-print"></i>'; typeColor = 'border-green-400'; titlePrefix = '交通'; }
+            else if (item.type === 'accommodation') { iconHtml = '<i class="fas fa-bed text-purple-500 text-sm no-print"></i>'; typeColor = 'border-purple-400'; titlePrefix = '住宿'; }
+
+            let borderClass = `border-l-4 ${typeColor}`;
+            if (validations.hasConflict) borderClass = 'border-l-4 border-red-500 bg-red-50';
+            else if (validations.hasTimeWarning) borderClass = 'border-l-4 border-yellow-400 bg-yellow-50';
+
+            // 通用的时间输入区域
+            const timeHtml = `
+                <div class="flex items-center gap-2">
+                    <div class="flex flex-col">
+                        <label class="text-xs text-gray-500 no-print">${item.type === 'accommodation' ? '入住时间' : '开始时间'}</label>
+                        <input type="time" value="${item.startTime}" class="item-input time-input p-1 border rounded bg-white font-mono text-sm" data-field="startTime">
+                    </div>
+                    <span class="text-gray-400 font-bold mt-4">-</span>
+                    <div class="flex flex-col">
+                        <label class="text-xs text-gray-500 no-print">${item.type === 'accommodation' ? '退房时间' : '结束时间'}</label>
+                        <input type="time" value="${item.endTime}" class="item-input time-input p-1 border rounded bg-white font-mono text-sm" data-field="endTime">
+                    </div>
+                </div>
+            `;
+
+            let bodyHtml = '';
+
+            // 1. 景点或餐厅结构
+            if (item.type === 'attraction' || item.type === 'restaurant') {
+                bodyHtml = `
+                    <div class="flex flex-wrap gap-3 items-center">
+                        <div class="flex-1 min-w-[200px]">
+                            <label class="text-xs text-gray-500 no-print">${titlePrefix}名称</label>
+                            <div class="flex items-center gap-1">
+                                ${iconHtml}
+                                <input type="text" value="${item.name}" class="item-input name-input w-full font-bold text-gray-800 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-blue-500" data-field="name">
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                <span class="bg-gray-200 px-1 rounded">${item.city}</span>
+                                <span>推荐时长: ${item.recTime}分钟</span>
+                            </div>
+                        </div>
+                        ${timeHtml}
+                    </div>
+                    <textarea class="item-input w-full mt-2 text-sm text-gray-600 bg-transparent border-b border-dashed border-gray-200 focus:outline-none focus:border-blue-500" rows="1" placeholder="添加备注..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            } 
+            // 2. 交通结构
+            else if (item.type === 'transport') {
+                const isTaxi = item.transportMode === 'taxi';
+                bodyHtml = `
+                    <div class="flex flex-wrap gap-3 items-start">
+                        <div class="flex-1 min-w-[300px]">
+                            <div class="flex items-center gap-2 mb-2">
+                                ${iconHtml}
+                                <select class="item-input font-bold text-green-700 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-green-500" data-field="transportMode">
+                                    <option value="transit" ${!isTaxi ? 'selected' : ''}>🚇 公共交通 (地铁/公交)</option>
+                                    <option value="taxi" ${isTaxi ? 'selected' : ''}>🚕 打车/网约车</option>
+                                </select>
+                            </div>
+                            
+                            ${isTaxi ? `
+                                <div class="flex gap-4 items-center w-full mt-2 bg-green-50 p-2 rounded border border-green-100">
+                                    <div>
+                                        <label class="text-xs text-gray-500 block">预估用时(分钟)</label>
+                                        <input type="number" placeholder="如: 30" class="item-input w-24 border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none" data-field="duration" value="${item.duration || ''}">
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-500 block">费用/备注</label>
+                                        <input type="text" placeholder="如: 约50元" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none" data-field="cost" value="${item.cost || ''}">
+                                    </div>
+                                </div>
+                            ` : `
+                                <div class="grid grid-cols-2 gap-x-4 gap-y-2 w-full text-sm mt-2 bg-green-50 p-3 rounded border border-green-100">
+                                    <div class="col-span-2 flex gap-3">
+                                        <div class="flex-1"><label class="text-xs text-gray-500 block">乘车线路</label><input type="text" placeholder="如: 地铁1号线" data-field="transitLine" value="${item.transitLine || ''}" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none"></div>
+                                        <div class="w-24"><label class="text-xs text-gray-500 block">预估用时(分)</label><input type="number" placeholder="如: 45" data-field="duration" value="${item.duration || ''}" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none"></div>
+                                    </div>
+                                    <div><label class="text-xs text-blue-600 block font-bold">起点站</label><input type="text" placeholder="上车站名" data-field="startStation" value="${item.startStation || ''}" class="item-input w-full border-b bg-transparent border-blue-200 focus:border-blue-500 focus:outline-none"></div>
+                                    <div><label class="text-xs text-blue-500 block">进站出口</label><input type="text" placeholder="如: A口" data-field="startExit" value="${item.startExit || ''}" class="item-input w-full border-b bg-transparent border-blue-200 focus:border-blue-500 focus:outline-none"></div>
+                                    
+                                    <div class="col-span-2 border-t border-dashed border-green-200 my-1"></div>
+                                    
+                                    <div class="col-span-2"><label class="text-xs text-orange-500 block">转乘站(可选)</label><input type="text" placeholder="如: 换乘2号线(体育西路站)" data-field="transferStation" value="${item.transferStation || ''}" class="item-input w-full border-b bg-transparent border-orange-200 focus:border-orange-500 focus:outline-none"></div>
+                                    
+                                    <div class="col-span-2 border-t border-dashed border-green-200 my-1"></div>
+                                    
+                                    <div><label class="text-xs text-red-600 block font-bold">终点站</label><input type="text" placeholder="下车站名" data-field="endStation" value="${item.endStation || ''}" class="item-input w-full border-b bg-transparent border-red-200 focus:border-red-500 focus:outline-none"></div>
+                                    <div><label class="text-xs text-red-500 block">出站出口</label><input type="text" placeholder="如: C口" data-field="endExit" value="${item.endExit || ''}" class="item-input w-full border-b bg-transparent border-red-200 focus:border-red-500 focus:outline-none"></div>
+                                </div>
+                            `}
+                        </div>
+                        <div class="flex items-end h-full">
+                           ${timeHtml}
+                        </div>
+                    </div>
+                    <textarea class="item-input w-full mt-2 text-sm text-gray-600 bg-transparent border-b border-dashed border-gray-200 focus:outline-none focus:border-green-500" rows="1" placeholder="交通备忘录..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            }
+            // 3. 住宿结构
+            else if (item.type === 'accommodation') {
+                bodyHtml = `
+                    <div class="flex flex-wrap gap-3 items-start">
+                        <div class="flex-1 min-w-[200px]">
+                            <label class="text-xs text-gray-500 no-print">酒店/民宿名称</label>
+                            <div class="flex items-center gap-1">
+                                ${iconHtml}
+                                <input type="text" value="${item.name || ''}" placeholder="请输入住宿名称" class="item-input name-input w-full font-bold text-gray-800 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-purple-500" data-field="name">
+                            </div>
+                            <div class="mt-3 flex items-center gap-2">
+                                <label class="text-xs text-purple-700 no-print bg-purple-100 px-2 py-0.5 rounded font-medium">💰 价格</label>
+                                <input type="text" value="${item.price || ''}" placeholder="如: ¥500/晚" class="item-input flex-1 border-b bg-transparent text-sm focus:outline-none focus:border-purple-500" data-field="price">
+                            </div>
+                        </div>
+                        <div class="flex items-end h-full">
+                            ${timeHtml}
+                        </div>
+                    </div>
+                    <textarea class="item-input w-full mt-3 text-sm text-gray-600 bg-purple-50 p-2 rounded border border-dashed border-purple-200 focus:outline-none focus:border-purple-500" rows="2" placeholder="备注栏 (填写房型、预订号、电话等信息)..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            }
+
+            return `
+                <div class="border rounded p-3 shadow-sm ${borderClass} relative" data-item-id="${item.id}">
+                    <button onclick="removeItineraryItem(${dayId}, '${item.id}')" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 no-print z-10">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                    ${bodyHtml}
+                    <!-- 警告提示区 -->
+                    <div class="mt-2 text-sm font-medium">
+                        ${validations.hasConflict ? `<div class="text-red-600"><i class="fas fa-exclamation-circle"></i> 错误：与本日其他行程发生时间冲突！不能重叠。</div>` : ''}
+                        ${validations.hasTimeWarning ? `<div class="text-yellow-600"><i class="fas fa-exclamation-triangle"></i> 提示：规划${item.type === 'restaurant' ? '就餐' : '游玩'}时间（${validations.actualTime}分钟）小于推荐时长（${item.recTime}分钟）的70%。</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        // ---------------- 核心逻辑：验证与处理 ----------------
+
+        function validateItem(dayId, item) {
+            const day = days.find(d => d.id === dayId);
+            let hasConflict = false;
+            let hasTimeWarning = false;
+            let actualTime = 0;
+
+            const startMins = timeToMins(item.startTime);
+            const endMins = timeToMins(item.endTime);
+
+            // 1. 检查游玩时间是否 < 70% (仅针对游玩和餐饮)
+            if (item.type === 'attraction' || item.type === 'restaurant') {
+                if (item.startTime && item.endTime && endMins > startMins) {
+                    actualTime = endMins - startMins;
+                    if (actualTime < item.recTime * 0.7) {
+                        hasTimeWarning = true;
+                    }
+                }
+            }
+
+            // 2. 检查时间冲突 (在同一天内)
+            // 住宿（accommodation）不参与任何时间冲突校验（因为酒店退房通常在第二天，且住宿期间有重叠不报错）
+            if (item.type !== 'accommodation' && item.startTime && item.endTime) {
+                day.items.forEach(otherItem => {
+                    if (otherItem.id === item.id) return; // 跳过自己
+                    if (otherItem.type === 'accommodation') return; // 忽略与其他住宿的时间碰撞
+                    if (!otherItem.startTime || !otherItem.endTime) return;
+
+                    const oStart = timeToMins(otherItem.startTime);
+                    const oEnd = timeToMins(otherItem.endTime);
+
+                    // 避免跨天退房导致的时间倒挂造成的计算错误
+                    if(endMins < startMins || oEnd < oStart) return;
+
+                    // 冲突判断逻辑：(A开始 < B结束) 且 (A结束 > B开始) 则重叠
+                    if (startMins < oEnd && endMins > oStart) {
+                        hasConflict = true;
+                    }
+                });
+            }
+
+            return { hasConflict, hasTimeWarning, actualTime };
+        }
+
+        function getDropPositionInfo(dayEl, clientY) {
+            const itemEls = [...dayEl.querySelectorAll('[data-item-id]:not(.dragging)')];
+            let prevItemEl = null;
+            
+            for (let el of itemEls) {
+                const box = el.getBoundingClientRect();
+                // 如果鼠标位于卡片下半部分的下方，则认为是要插在这个卡片之后
+                if (clientY > box.top + box.height / 2) {
+                    prevItemEl = el;
+                }
+            }
+            return prevItemEl ? prevItemEl.dataset.itemId : null;
+        }
+
+        function handlePoolDrop(targetDayId, poolItem, clientY) {
+            // 检查该项目是否已经被添加到任何一天的行程中
+            if (isItemUsed(poolItem.id)) {
+                alert('该项目已经在您的行程中了，不可重复添加！');
+                return;
+            }
+
+            const targetDay = days.find(d => d.id === targetDayId);
+            const dayEl = document.querySelector(`[data-day-id="${targetDayId}"]`);
+            
+            // 计算释放位置，智能调整时间
+            const prevItemId = getDropPositionInfo(dayEl, clientY);
+            let newStartTime = "09:00";
+            
+            if (prevItemId) {
+                const prevItem = targetDay.items.find(i => i.id === prevItemId);
+                if (prevItem && prevItem.endTime) {
+                    newStartTime = minsToTime(timeToMins(prevItem.endTime) + 10); // 顺延并预留10分钟空隙
+                }
+            } else if (targetDay.items.length > 0) {
+                 const firstItem = [...targetDay.items].sort((a,b) => timeToMins(a.startTime) - timeToMins(b.startTime))[0];
+                 if (firstItem && firstItem.startTime) {
+                     newStartTime = minsToTime(Math.max(0, timeToMins(firstItem.startTime) - poolItem.recTime - 10));
+                 }
+            }
+            
+            const startMins = timeToMins(newStartTime);
+            const endMins = startMins + poolItem.recTime;
+            const defaultEnd = minsToTime(endMins);
+
+            const newItem = {
+                id: generateId(),
+                poolId: poolItem.id,
+                type: poolItem.type || 'attraction',
+                name: poolItem.name,
+                city: poolItem.city,
+                recTime: poolItem.recTime,
+                desc: poolItem.desc,
+                startTime: newStartTime,
+                endTime: defaultEnd
+            };
+
+            targetDay.items.push(newItem);
+            renderItinerary();
+            renderPool(); // 重新渲染左侧列表，使其置灰
+        }
+
+        function handleItineraryDrop(targetDayId, sourceData, clientY) {
+            const sourceDay = days.find(d => d.id === sourceData.dayId);
+            const targetDay = days.find(d => d.id === targetDayId);
+            const dayEl = document.querySelector(`[data-day-id="${targetDayId}"]`);
+            
+            const prevItemId = getDropPositionInfo(dayEl, clientY);
+            
+            // 从源天数中移除
+            sourceDay.items = sourceDay.items.filter(i => i.id !== sourceData.item.id);
+            
+            let newStartTime = "09:00";
+            const duration = timeToMins(sourceData.item.endTime) - timeToMins(sourceData.item.startTime);
+            
+            if (prevItemId) {
+                const prevItem = targetDay.items.find(i => i.id === prevItemId);
+                if (prevItem && prevItem.endTime) {
+                    newStartTime = minsToTime(timeToMins(prevItem.endTime) + 10); // 10分钟空隙
+                }
+            } else if (targetDay.items.length > 0) {
+                 const firstItem = [...targetDay.items].sort((a,b) => timeToMins(a.startTime) - timeToMins(b.startTime))[0];
+                 if (firstItem && firstItem.startTime) {
+                     newStartTime = minsToTime(Math.max(0, timeToMins(firstItem.startTime) - (duration > 0 ? duration : 30) - 10));
+                 }
+            } else {
+                 newStartTime = sourceData.item.startTime; // 放到空天数里，保持原时间
+            }
+            
+            sourceData.item.startTime = newStartTime;
+            sourceData.item.endTime = minsToTime(timeToMins(newStartTime) + (duration > 0 ? duration : 30));
+            
+            targetDay.items.push(sourceData.item);
+            renderItinerary();
+            renderPool();
+        }
+
+        function addTransport(dayId) {
+            const day = days.find(d => d.id === dayId);
+            let defaultStart = "08:00";
+            
+            // 尝试紧接上一个行程的结束时间
+            if (day.items.length > 0) {
+                const latestItem = [...day.items].sort((a, b) => timeToMins(b.endTime) - timeToMins(a.endTime))[0];
+                if (latestItem && latestItem.endTime) {
+                    defaultStart = latestItem.endTime; // 交通通常紧接上一个地点离开的时间
+                }
+            }
+            
+            day.items.push({
+                id: generateId(),
+                type: 'transport',
+                transportMode: 'transit', // 默认为地铁/公交
+                startTime: defaultStart,
+                endTime: minsToTime(timeToMins(defaultStart) + 30),
+                duration: 30, // 默认30分钟
+                transitLine: '', startStation: '', startExit: '', transferStation: '', endStation: '', endExit: '',
+                cost: '', desc: ''
+            });
+            renderItinerary();
+        }
+
+        function addAccommodation(dayId) {
+            const day = days.find(d => d.id === dayId);
+            day.items.push({
+                id: generateId(),
+                type: 'accommodation',
+                name: '',
+                price: '',
+                startTime: '20:00', // 默认晚上8点办理入住
+                endTime: '08:00',   // 默认第二天8点出门/退房
+                desc: ''
+            });
+            renderItinerary();
+        }
+
+        // 绑定输入框变化事件，实时更新数据和验证
+        function bindItemEvents() {
+            document.querySelectorAll('.item-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const el = e.target;
+                    const field = el.dataset.field;
+                    const value = el.value;
+                    const itemEl = el.closest('[data-item-id]');
+                    const dayEl = el.closest('[data-day-id]');
+                    
+                    const itemId = itemEl.dataset.itemId;
+                    const dayId = parseInt(dayEl.dataset.dayId);
+                    
+                    const day = days.find(d => d.id === dayId);
+                    const item = day.items.find(i => i.id === itemId);
+                    
+                    if (item) {
+                        item[field] = value;
+                        
+                        // 住宿属于跨天业务，不强制进行时间大小约束
+                        if (item.type !== 'accommodation') {
+                            // 确保结束时间不能早于开始时间，并自动补充时长
+                            if(field === 'startTime' && timeToMins(item.startTime) >= timeToMins(item.endTime)){
+                                 item.endTime = minsToTime(timeToMins(item.startTime) + (item.recTime || 30));
+                            }
+                            if(field === 'endTime' && timeToMins(item.endTime) <= timeToMins(item.startTime)){
+                                 item.startTime = minsToTime(Math.max(0, timeToMins(item.endTime) - (item.recTime || 30)));
+                            }
+                        }
+
+                        renderItinerary(); // 重新渲染以更新警告、UI切换和排序
+                    }
+                });
+            });
+        }
+
+        // ---------------- 用户交互操作 ----------------
+
+        function addPoolItem(e) {
+            e.preventDefault();
+            const type = document.getElementById('p_type').value;
+            const name = document.getElementById('p_name').value;
+            const city = document.getElementById('p_city').value;
+            const time = parseInt(document.getElementById('p_time').value);
+            const desc = document.getElementById('p_desc').value;
+
+            pool.push({
+                id: generateId(),
+                type, name, city, recTime: time, desc
+            });
+
+            document.getElementById('addPoolForm').reset();
+            renderPool();
+        }
+
+        function removePoolItem(id) {
+            pool = pool.filter(item => item.id !== id);
+            renderPool();
+        }
+
+        function addDay() {
+            dayCounter++;
+            days.push({ id: dayCounter, items: [] });
+            renderItinerary();
+        }
+
+        function removeDay(id) {
+            if(confirm('确定要删除这一天及其所有行程吗？')) {
+                days = days.filter(day => day.id !== id);
+                renderItinerary();
+                renderPool(); // 释放被占用的景点，使其恢复可拖拽
+            }
+        }
+
+        function removeItineraryItem(dayId, itemId) {
+            const day = days.find(d => d.id === dayId);
+            if (day) {
+                const index = day.items.findIndex(item => item.id === itemId);
+                if (index > -1) {
+                    const deletedItem = day.items[index];
+                    day.items.splice(index, 1);
+                    renderItinerary();
+                    renderPool(); // 释放被占用的景点，使其恢复可拖拽
+                    showUndoToast(dayId, deletedItem);
+                }
+            }
+        }
+
+        function showUndoToast(dayId, deletedItem) {
+            const container = document.getElementById('toastContainer');
+            
+            // 清除旧的提示（如果连续删除，只提示最后一次）
+            container.innerHTML = '';
+            if (toastTimeout) clearTimeout(toastTimeout);
+            
+            const toast = document.createElement('div');
+            toast.className = 'bg-gray-800 text-white px-4 py-3 rounded shadow-lg flex items-center justify-between gap-4 toast-enter min-w-[300px] border-l-4 border-blue-500';
+            
+            let itemName = deletedItem.name || (deletedItem.type === 'transport' ? '交通规划' : '住宿安排');
+            toast.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-info-circle text-blue-400"></i>
+                    <span class="text-sm">已删除: <span class="font-bold">${itemName}</span></span>
+                </div>
+                <button id="undoBtn" class="text-blue-400 hover:text-white font-bold text-sm px-3 py-1.5 rounded bg-gray-700 hover:bg-blue-600 transition">
+                    <i class="fas fa-undo mr-1"></i>撤销
+                </button>
+            `;
+            
+            container.appendChild(toast);
+            
+            // 绑定撤销事件
+            toast.querySelector('#undoBtn').addEventListener('click', () => {
+                const day = days.find(d => d.id === dayId);
+                if (day) {
+                    day.items.push(deletedItem); // 放回原处
+                    renderItinerary();
+                    renderPool(); // 若恢复的包含景点，左侧会重新置灰
+                }
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+                if (toastTimeout) clearTimeout(toastTimeout);
+            });
+            
+            // 5秒后自动隐藏
+            toastTimeout = setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(20px)';
+                toast.style.transition = 'all 0.3s ease-out';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        // ---------------- XML 导入功能 ----------------
+        
+        function exportPoolXML() {
+            let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<pool>\n';
+            pool.forEach(item => {
+                xml += `  <item>\n`;
+                xml += `    <id>${item.id}</id>\n`;
+                xml += `    <type>${item.type}</type>\n`;
+                xml += `    <name>${escapeXML(item.name)}</name>\n`;
+                xml += `    <city>${escapeXML(item.city)}</city>\n`;
+                xml += `    <recommendedTime>${item.recTime}</recommendedTime>\n`;
+                xml += `    <description>${escapeXML(item.desc)}</description>\n`;
+                xml += `  </item>\n`;
+            });
+            xml += '</pool>';
+
+            // 触发本地下载
+            const blob = new Blob([xml], { type: 'application/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '我的行程池.xml';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportXML() {
+            let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<travel_plan>\n';
+
+            // 1. 导出景点/餐饮池
+            xml += '  <pool>\n';
+            pool.forEach(item => {
+                xml += `    <item>\n`;
+                xml += `      <id>${item.id}</id>\n`;
+                xml += `      <type>${item.type}</type>\n`;
+                xml += `      <name>${escapeXML(item.name)}</name>\n`;
+                xml += `      <city>${escapeXML(item.city)}</city>\n`;
+                xml += `      <recommendedTime>${item.recTime}</recommendedTime>\n`;
+                xml += `      <description>${escapeXML(item.desc)}</description>\n`;
+                xml += `    </item>\n`;
+            });
+            xml += '  </pool>\n';
+
+            // 2. 导出已规划的行程安排
+            xml += '  <itinerary>\n';
+            days.forEach(day => {
+                xml += `    <day id="${day.id}">\n`;
+                day.items.forEach(item => {
+                    xml += `      <schedule_item>\n`;
+                    for (const key in item) {
+                        xml += `        <${key}>${escapeXML(item[key])}</${key}>\n`;
+                    }
+                    xml += `      </schedule_item>\n`;
+                });
+                xml += `    </day>\n`;
+            });
+            xml += '  </itinerary>\n';
+            xml += '</travel_plan>';
+
+            // 触发本地下载
+            const blob = new Blob([xml], { type: 'application/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '我的旅行规划.xml';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        /* 支持的XML格式示例:
+          <itinerary>
+            <item>
+                <name>上海迪士尼</name>
+                <city>上海</city>
+                <recommendedTime>480</recommendedTime>
+                <description>大型主题乐园</description>
+            </item>
+          </itinerary>
+        */
+        function importXML(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const text = e.target.result;
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(text, "text/xml");
+                    
+                    // 检查解析错误
+                    if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
+                        alert("XML格式错误，请检查文件。");
+                        return;
+                    }
+
+                    // --- 新增：判断是否为系统导出的完整备份 ---
+                    const isFullPlan = xmlDoc.querySelector('travel_plan');
+                    if (isFullPlan) {
+                        if (!confirm("检测到完整的行程规划文件！导入将覆盖当前的所有进度，是否继续？")) {
+                            document.getElementById('xmlUpload').value = '';
+                            return;
+                        }
+
+                        // 恢复景点池
+                        pool = [];
+                        xmlDoc.querySelectorAll('pool > item').forEach(node => {
+                            pool.push({
+                                id: node.querySelector("id")?.textContent || generateId(),
+                                type: node.querySelector("type")?.textContent || 'attraction',
+                                name: node.querySelector("name")?.textContent || '未命名',
+                                city: node.querySelector("city")?.textContent || '',
+                                recTime: parseInt(node.querySelector("recommendedTime")?.textContent) || 60,
+                                desc: node.querySelector("description")?.textContent || ''
+                            });
+                        });
+
+                        // 恢复行程安排
+                        days = [];
+                        let maxDayId = 0;
+                        xmlDoc.querySelectorAll('itinerary > day').forEach(dayNode => {
+                            const dId = parseInt(dayNode.getAttribute('id')) || (++maxDayId);
+                            if (dId > maxDayId) maxDayId = dId;
+                            
+                            const dayItems = [];
+                            dayNode.querySelectorAll('schedule_item').forEach(itemNode => {
+                                const itemObj = {};
+                                itemNode.childNodes.forEach(child => {
+                                    if (child.nodeType === 1) { // 仅处理元素节点
+                                        itemObj[child.nodeName] = child.textContent;
+                                    }
+                                });
+                                // 修正必要的数字类型
+                                if (itemObj.recTime) itemObj.recTime = parseInt(itemObj.recTime);
+                                if (itemObj.duration) itemObj.duration = parseInt(itemObj.duration);
+                                dayItems.push(itemObj);
+                            });
+                            days.push({ id: dId, items: dayItems });
+                        });
+                        
+                        dayCounter = maxDayId || 1;
+                        if (days.length === 0) days.push({ id: 1, items: [] });
+
+                        alert("完整行程规划恢复成功！");
+                        renderPool();
+                        renderItinerary();
+                    } 
+                    // --- 兼容旧版逻辑：单纯追加景点列表 ---
+                    else {
+                        const items = xmlDoc.querySelectorAll("item, attraction"); // 兼容两种常见标签
+                        let addedCount = 0;
+
+                        items.forEach(node => {
+                            const name = node.querySelector("name")?.textContent || "未命名";
+                            const city = node.querySelector("city")?.textContent || "未知";
+                            const timeStr = node.querySelector("recommendedTime")?.textContent || "60";
+                            const desc = node.querySelector("description")?.textContent || "";
+                            
+                            // 智能识别类型
+                            let type = 'attraction';
+                            if (node.tagName.toLowerCase() === 'restaurant' || desc.includes('美食') || desc.includes('餐饮') || desc.includes('餐厅')) {
+                                type = 'restaurant';
+                            } else if (node.querySelector("type")) {
+                                const xmlType = node.querySelector("type").textContent;
+                                if (xmlType === 'restaurant' || xmlType === '餐饮' || xmlType === '餐厅') type = 'restaurant';
+                            }
+                            
+                            pool.push({
+                                id: generateId(),
+                                type: type,
+                                name: name,
+                                city: city,
+                                recTime: parseInt(timeStr) || 60,
+                                desc: desc
+                            });
+                            addedCount++;
+                        });
+
+                        alert(`成功导入 ${addedCount} 个项目！`);
+                        renderPool();
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("导入失败，XML文件解析异常。");
+                }
+                // 清空 input，允许重复上传同一文件
+                document.getElementById('xmlUpload').value = '';
+            };
+            reader.readAsText(file);
+        }
+
+        // 初始化
+        renderPool();
+        renderItinerary();
+
+    </script>
+
+    <!-- 撤销提示框容器 -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 no-print"></div>
+</body>
+</html>
