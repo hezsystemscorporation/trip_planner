@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能旅行行程规划</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- 引入移动端触摸拖拽 Polyfill -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/scroll-behaviour.min.js"></script>
+    <script>
+        // 激活移动端拖拽功能
+        window.addEventListener('DOMContentLoaded', () => {
+            if (window.MobileDragDrop) {
+                window.MobileDragDrop.polyfill({
+                    // 使用安全检查，防止 ReferenceError
+                    dragImageTranslateOverride: window.mobileDragDrop ? window.mobileDragDrop.scrollBehaviourDragImageTranslateOverride : undefined
+                });
+            }
+            // 解决 iOS Safari 上拖拽时页面滚动的冲突
+            window.addEventListener('touchmove', function() {}, {passive: false});
+        });
+    </script>
+
+    <style>
+        /* 拖拽时的样式 */
+        .dragging {
+            opacity: 0.5;
+            transform: scale(0.98);
+        }
+        .drop-zone {
+            transition: all 0.2s;
+        }
+        .drop-zone.drag-over {
+            background-color: #eff6ff;
+            border-color: #3b82f6;
+        }
+        
+        /* 拖拽目标实时指示线 */
+        .drag-indicator-top {
+            border-top: 3px solid #3b82f6 !important;
+            border-top-left-radius: 0 !important;
+            border-top-right-radius: 0 !important;
+        }
+        .drag-indicator-bottom {
+            border-bottom: 3px solid #3b82f6 !important;
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+        }
+        
+        /* 隐藏原生时间选择器的清除按钮，保持UI整洁 */
+        input[type="time"]::-webkit-clear-button {
+            display: none;
+        }
+
+        /* 打印样式 (导出为PDF时使用) - 彻底修复滚动条截断问题 */
+        @media print {
+            body, html {
+                height: auto !important;
+                display: block !important;
+                overflow: visible !important;
+                background-color: white !important;
+                color: black !important;
+            }
+            .h-screen, .h-\[40vh\], .overflow-hidden, .overflow-y-auto, .flex-1 {
+                height: auto !important;
+                min-height: 0 !important;
+                max-height: none !important;
+                overflow: visible !important;
+                display: block !important;
+            }
+            .flex-col.md\:flex-row {
+                display: block !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .print-full-width {
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                display: block !important;
+            }
+            .shadow-md, .shadow-sm {
+                box-shadow: none !important;
+                border: 1px solid #e5e7eb !important;
+            }
+            /* 强制背景色打印 */
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .print-page-break {
+                page-break-inside: avoid;
+                margin-bottom: 24px !important;
+            }
+            .print-header {
+                display: block !important;
+                text-align: center;
+                font-size: 24px;
+                font-weight: bold;
+                margin-bottom: 20px;
+                border-bottom: 2px solid #000;
+                padding-bottom: 10px;
+            }
+            /* 将输入框转换为纯文本展示 */
+            input, select, textarea {
+                border: none !important;
+                background: transparent !important;
+                resize: none !important;
+                padding: 0 !important;
+                font-weight: inherit !important;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+            }
+        }
+        
+        .print-header { display: none; }
+        
+        /* 撤销提示框动画 */
+        @keyframes slideInUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .toast-enter {
+            animation: slideInUp 0.3s ease-out forwards;
+        }
+        
+        /* 模态框动画 */
+        .modal-enter {
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col font-sans">
+
+    <!-- 导航栏 (响应式：手机端垂直堆叠，电脑端水平) -->
+    <nav class="bg-blue-600 text-white p-3 md:p-4 shadow-md flex flex-col md:flex-row justify-between items-center no-print gap-3">
+        <h1 class="text-xl font-bold w-full md:w-auto text-center md:text-left"><i class="fas fa-map-marked-alt mr-2"></i>智能旅行规划系统</h1>
+        <div class="flex gap-2 flex-wrap justify-center md:justify-end w-full md:w-auto">
+            <button onclick="document.getElementById('xmlUpload').click()" class="bg-blue-500 hover:bg-blue-400 px-3 md:px-4 py-2 rounded text-sm transition flex items-center">
+                <i class="fas fa-file-import md:mr-1"></i> <span class="hidden md:inline">导入XML景点</span>
+            </button>
+            <input type="file" id="xmlUpload" accept=".xml" class="hidden" onchange="importXML(event)">
+            
+            <button onclick="exportXML()" class="bg-indigo-500 hover:bg-indigo-400 px-3 md:px-4 py-2 rounded text-sm transition shadow-sm flex items-center">
+                <i class="fas fa-file-export md:mr-1"></i> <span class="hidden md:inline">导出规划(XML)</span>
+            </button>
+
+            <button onclick="window.print()" class="bg-white text-blue-600 hover:bg-gray-100 px-3 md:px-4 py-2 rounded text-sm font-bold transition shadow flex items-center">
+                <i class="fas fa-file-pdf md:mr-1"></i> <span class="hidden md:inline">导出 PDF</span>
+            </button>
+        </div>
+    </nav>
+
+    <div class="print-header">我的旅行行程规划</div>
+
+    <!-- 主体内容 (响应式：手机端上下结构，电脑端左右结构) -->
+    <div class="flex flex-col md:flex-row flex-1 overflow-hidden p-2 md:p-4 gap-4 md:gap-6 print-full-width">
+        
+        <!-- 左侧/上半部：景点池 (非打印区域) -->
+        <div class="w-full md:w-1/3 h-[40vh] md:h-auto flex flex-col bg-white rounded-lg shadow-md overflow-hidden no-print">
+            <div class="p-3 md:p-4 bg-gray-50 border-b flex justify-between items-center shrink-0">
+                <h2 class="text-base md:text-lg font-bold text-gray-700">📌 行程池 (可拖拽)</h2>
+                <button onclick="exportPoolXML()" class="text-blue-600 hover:bg-blue-100 px-2 py-1 rounded text-sm transition" title="仅导出当前景点/餐饮池列表">
+                    <i class="fas fa-download mr-1"></i>导出池
+                </button>
+            </div>
+            
+            <!-- 手动录入表单 -->
+            <div class="p-3 md:p-4 border-b bg-gray-50 shrink-0">
+                <form id="addPoolForm" class="flex flex-col gap-2" onsubmit="addPoolItem(event)">
+                    <div class="flex gap-2">
+                        <select id="p_type" class="w-20 shrink-0 p-2 border rounded text-xs md:text-sm focus:outline-blue-500 bg-white">
+                            <option value="attraction">景点</option>
+                            <option value="restaurant">餐饮</option>
+                        </select>
+                        <input type="text" id="p_name" placeholder="名称" required class="flex-1 min-w-0 p-2 border rounded text-xs md:text-sm focus:outline-blue-500">
+                        <input type="text" id="p_city" placeholder="城市" required class="w-16 md:w-20 shrink-0 p-2 border rounded text-xs md:text-sm focus:outline-blue-500">
+                    </div>
+                    <div class="flex gap-2 items-center">
+                        <input type="number" id="p_time" placeholder="时长(分)" required min="1" class="w-20 shrink-0 p-2 border rounded text-xs md:text-sm focus:outline-blue-500">
+                        <input type="text" id="p_desc" placeholder="条目描述(可选)" class="flex-1 min-w-0 p-2 border rounded text-xs md:text-sm focus:outline-blue-500">
+                        <button type="submit" class="bg-green-500 hover:bg-green-600 text-white px-3 md:px-4 py-2 rounded text-xs md:text-sm transition shrink-0">添加</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- 景点列表 -->
+            <div id="poolContainer" class="flex-1 overflow-y-auto p-3 md:p-4 space-y-3 relative pb-10">
+                <!-- 动态生成景点卡片 -->
+            </div>
+        </div>
+
+        <!-- 右侧/下半部：行程规划 (打印区域主干) -->
+        <div class="w-full md:w-2/3 flex flex-1 flex-col bg-white rounded-lg shadow-md overflow-hidden print-full-width">
+            <div class="p-3 md:p-4 bg-gray-50 border-b flex justify-between items-center shrink-0 no-print">
+                <h2 class="text-base md:text-lg font-bold text-gray-700">🗓️ 行程安排</h2>
+                <button onclick="addDay()" class="bg-indigo-500 hover:bg-indigo-600 text-white px-3 md:px-4 py-2 rounded text-sm transition shadow-sm">
+                    <i class="fas fa-plus mr-1"></i> 新增一天
+                </button>
+            </div>
+            
+            <div id="itineraryContainer" class="flex-1 overflow-y-auto p-3 md:p-4 space-y-6 pb-20 print-full-width">
+                <!-- 动态生成天数和行程 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ---------------- 状态管理 ----------------
+        
+        // 景点池数据
+        let pool = [
+            // --- 珠海市景点与美食 ---
+            { id: 'zh1', type: 'attraction', name: '横琴花海长廊', city: '珠海', recTime: 240, desc: '自然景观。11-12月异木棉盛花期。' },
+            { id: 'zh2', type: 'attraction', name: '大万山岛/东澳岛', city: '珠海', recTime: 600, desc: '自然景观、休闲度假。秋末冬初黄金时段。' },
+            { id: 'zh3', type: 'attraction', name: '桂山岛', city: '珠海', recTime: 240, desc: '海岛风光、传统渔村风情。' },
+            { id: 'zh6', type: 'attraction', name: '梅溪牌坊旅游区', city: '珠海', recTime: 180, desc: '人文景观，古典建筑、近代庄园叙事。' },
+            { id: 'zh10', type: 'attraction', name: '长隆旅游度假区', city: '珠海', recTime: 600, desc: '超级主题乐园、海洋动物。需预留一整天。' },
+            { id: 'zhf1', type: 'restaurant', name: '金悦轩/协成', city: '珠海', recTime: 90, desc: '美食：粤式高端海鲜与创新茶点。' },
+            { id: 'zhf2', type: 'restaurant', name: '颓记/渔记茶餐厅', city: '珠海', recTime: 60, desc: '美食：港澳交融的市井茶餐厅。' },
+            
+            // --- 广州市景点与美食 ---
+            { id: 'gz1', type: 'attraction', name: '华南国家植物园', city: '广州', recTime: 240, desc: '生态系统景观。初春至暮春赏花。' },
+            { id: 'gz2', type: 'attraction', name: '白云山风景名胜区', city: '广州', recTime: 240, desc: '自然景观。白云飞索、登高望远。' },
+            { id: 'gz7', type: 'attraction', name: '沙面岛', city: '广州', recTime: 120, desc: '欧洲古典主义历史建筑群。傍晚及入夜最佳。' },
+            { id: 'gz8', type: 'attraction', name: '永庆坊', city: '广州', recTime: 120, desc: '非遗手工、建筑文化，含粤剧艺术博物馆。' },
+            { id: 'gz10', type: 'attraction', name: '广州塔', city: '广州', recTime: 180, desc: '垂直娱乐体验。建议16:00-18:00观赏日落夜景。' },
+            { id: 'gzf1', type: 'restaurant', name: '吴财记面家', city: '广州', recTime: 60, desc: '美食：西关市井风味，招牌竹升面/炸云吞。' },
+            { id: 'gzf2', type: 'restaurant', name: '广州酒家', city: '广州', recTime: 90, desc: '美食：顶级老字号酒家与园林宴饮。' }
+        ];
+
+        // 行程数据
+        let days = [
+            { id: 1, items: [] }
+        ];
+        
+        let dayCounter = 1;
+        let draggedItem = null;
+        let draggedSource = null;
+        let draggedItineraryItem = null;
+        let toastTimeout = null;
+
+        // ---------------- 工具函数 ----------------
+        
+        const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
+        
+        const timeToMins = (timeStr) => {
+            if (!timeStr) return 0;
+            const [h, m] = timeStr.split(':').map(Number);
+            return h * 60 + m;
+        };
+
+        const minsToTime = (mins) => {
+            const h = Math.floor(mins / 60).toString().padStart(2, '0');
+            const m = (mins % 60).toString().padStart(2, '0');
+            return `${h}:${m}`;
+        };
+
+        const escapeXML = (str) => {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&apos;');
+        };
+
+        function clearDragIndicators() {
+            document.querySelectorAll('.drag-indicator-top, .drag-indicator-bottom').forEach(el => {
+                el.classList.remove('drag-indicator-top', 'drag-indicator-bottom');
+            });
+        }
+
+        // ---------------- 渲染函数 ----------------
+
+        function isItemUsed(poolId) {
+            return days.some(day => day.items.some(item => item.poolId === poolId));
+        }
+
+        function renderPool() {
+            const container = document.getElementById('poolContainer');
+            container.innerHTML = '';
+            
+            if(pool.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-400 mt-10">暂无数据，请添加或导入</div>';
+                return;
+            }
+
+            pool.forEach((item, index) => {
+                const used = isItemUsed(item.id);
+                const el = document.createElement('div');
+                
+                if (used) {
+                    el.className = 'bg-gray-100 border border-gray-200 p-3 rounded shadow-sm opacity-50 cursor-not-allowed';
+                    el.draggable = false;
+                } else {
+                    el.className = 'bg-white border border-gray-200 p-3 rounded shadow-sm cursor-move hover:border-blue-400 transition';
+                    el.draggable = true;
+                    
+                    el.addEventListener('dragstart', (e) => {
+                        draggedItem = item;
+                        draggedSource = 'pool';
+                        e.dataTransfer.setData('text/plain', item.id);
+                        setTimeout(() => el.classList.add('dragging'), 0);
+                    });
+                    el.addEventListener('dragend', () => {
+                        el.classList.remove('dragging');
+                        draggedItem = null;
+                        draggedSource = null;
+                    });
+                }
+                
+                el.dataset.id = item.id;
+
+                el.innerHTML = `
+                    <div class="flex justify-between items-start gap-2">
+                        <div class="font-bold ${used ? 'text-gray-500' : 'text-gray-800'} flex-1 min-w-0 pr-1 text-sm md:text-base">
+                            ${item.type === 'restaurant' ? `<i class="fas fa-utensils ${used ? 'text-gray-400' : 'text-orange-500'} mr-1"></i>` : `<i class="fas fa-map-marker-alt ${used ? 'text-gray-400' : 'text-blue-500'} mr-1"></i>`}
+                            ${item.name} 
+                        </div>
+                        <div class="flex flex-col items-end shrink-0 gap-1 max-w-[80px] md:max-w-[90px]">
+                            <button onclick="removePoolItem('${item.id}')" class="text-red-400 hover:text-red-600 ${used ? 'hidden' : ''}"><i class="fas fa-times"></i></button>
+                            <span class="text-xs ${used ? 'bg-gray-200 text-gray-500' : 'bg-blue-100 text-blue-800'} px-2 py-1 rounded w-full text-center truncate" title="${item.city}">${item.city}</span>
+                            ${used ? '<span class="text-xs bg-green-100 text-green-700 px-1 py-1 rounded w-full text-center whitespace-nowrap scale-90 md:scale-100"><i class="fas fa-check"></i> 已规划</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="text-xs md:text-sm ${used ? 'text-gray-400' : 'text-gray-500'} mt-1">
+                        <i class="far fa-clock"></i> 
+                        ${item.type === 'restaurant' ? '就餐' : '游玩'}: ${item.recTime}分钟
+                    </div>
+                    ${item.desc ? `<div class="text-[10px] md:text-xs ${used ? 'text-gray-300' : 'text-gray-400'} mt-1 line-clamp-2" title="${item.desc}">${item.desc}</div>` : ''}
+                `;
+                container.appendChild(el);
+            });
+        }
+
+        function renderItinerary() {
+            const container = document.getElementById('itineraryContainer');
+            container.innerHTML = '';
+
+            days.forEach((day, index) => {
+                const dayEl = document.createElement('div');
+                // 修复：移除 print-page-break，允许“天”这个大容器跨页，避免第一页大片空白
+                dayEl.className = 'border-2 border-gray-200 rounded-lg p-3 md:p-4 bg-white drop-zone';
+                dayEl.dataset.dayId = day.id;
+
+                dayEl.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dayEl.classList.add('drag-over');
+                    
+                    clearDragIndicators();
+                    const prevItemId = getDropPositionInfo(dayEl, e.clientY || (e.touches && e.touches[0].clientY));
+                    
+                    if (prevItemId) {
+                        const prevEl = dayEl.querySelector(`[data-item-id="${prevItemId}"]`);
+                        if (prevEl) prevEl.classList.add('drag-indicator-bottom');
+                    } else {
+                        const firstEl = dayEl.querySelector('[data-item-id]:not(.dragging)');
+                        if (firstEl) firstEl.classList.add('drag-indicator-top');
+                    }
+                });
+                
+                dayEl.addEventListener('dragleave', () => {
+                    dayEl.classList.remove('drag-over');
+                    clearDragIndicators();
+                });
+                
+                dayEl.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dayEl.classList.remove('drag-over');
+                    clearDragIndicators();
+                    
+                    const clientY = e.clientY || (e.changedTouches && e.changedTouches[0].clientY);
+                    
+                    if (draggedItem) {
+                        if (draggedSource === 'pool') {
+                            handlePoolDrop(day.id, draggedItem, clientY);
+                        } else if (draggedSource === 'itinerary') {
+                            handleItineraryDrop(day.id, draggedItineraryItem, clientY);
+                        }
+                    }
+                });
+
+                day.items.sort((a, b) => timeToMins(a.startTime) - timeToMins(b.startTime));
+
+                let itemsHtml = day.items.length === 0 
+                    ? `<div class="text-center text-gray-400 py-6 border-2 border-dashed border-gray-200 rounded mt-2 no-print text-sm">拖拽景点至此处，或在此添加规划</div>` 
+                    : '';
+
+                day.items.forEach(item => {
+                    itemsHtml += createItineraryItemHTML(day.id, item);
+                });
+
+                dayEl.innerHTML = `
+                    <div class="flex flex-col md:flex-row md:justify-between items-start md:items-center border-b pb-2 mb-3 gap-2">
+                        <h3 class="text-lg md:text-xl font-bold text-indigo-600 shrink-0 w-full md:w-auto flex justify-between">
+                            <span><i class="fas fa-calendar-day mr-2"></i>Day ${index + 1}</span>
+                            <button onclick="removeDay(${day.id})" class="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-sm no-print transition md:hidden"><i class="fas fa-trash"></i></button>
+                        </h3>
+                        <div class="flex gap-2 flex-wrap justify-start md:justify-end w-full md:w-auto">
+                            <button onclick="addCustomAttraction(${day.id})" class="bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm no-print font-medium transition flex-1 md:flex-none text-center"><i class="fas fa-map-pin md:mr-1"></i><span class="hidden md:inline">加</span>游玩</button>
+                            <button onclick="addTransport(${day.id})" class="bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm no-print font-medium transition flex-1 md:flex-none text-center"><i class="fas fa-route md:mr-1"></i><span class="hidden md:inline">加</span>交通</button>
+                            <button onclick="addAccommodation(${day.id})" class="bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm no-print font-medium transition flex-1 md:flex-none text-center"><i class="fas fa-bed md:mr-1"></i><span class="hidden md:inline">加</span>住宿</button>
+                            <button onclick="removeDay(${day.id})" class="text-red-500 hover:bg-red-50 px-2 py-1.5 rounded text-sm no-print transition hidden md:block"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        ${itemsHtml}
+                    </div>
+                `;
+                container.appendChild(dayEl);
+            });
+            
+            bindItemEvents();
+
+            document.querySelectorAll('[data-item-id]').forEach(el => {
+                el.setAttribute('draggable', 'true');
+                el.classList.add('cursor-move');
+                
+                el.addEventListener('dragstart', (e) => {
+                    if (['input', 'textarea', 'select'].includes(e.target.tagName.toLowerCase())) {
+                        e.preventDefault();
+                        return;
+                    }
+                    
+                    const itemId = el.dataset.itemId;
+                    const dayEl = el.closest('[data-day-id]');
+                    const dayId = parseInt(dayEl.dataset.dayId);
+                    const day = days.find(d => d.id === dayId);
+                    const item = day.items.find(i => i.id === itemId);
+
+                    draggedItem = item;
+                    draggedSource = 'itinerary';
+                    draggedItineraryItem = { dayId, item };
+                    
+                    e.dataTransfer.effectAllowed = 'move';
+                    setTimeout(() => el.classList.add('dragging'), 0);
+                });
+                
+                el.addEventListener('dragend', () => {
+                    el.classList.remove('dragging');
+                    draggedItem = null;
+                    draggedSource = null;
+                    draggedItineraryItem = null;
+                    clearDragIndicators();
+                });
+            });
+        }
+
+        function createItineraryItemHTML(dayId, item) {
+            const validations = validateItem(dayId, item);
+            let iconHtml = '';
+            let typeColor = '';
+            let titlePrefix = '';
+            
+            if (item.type === 'restaurant') { iconHtml = '<i class="fas fa-utensils text-orange-500 text-sm no-print"></i>'; typeColor = 'border-orange-400'; titlePrefix = '就餐'; }
+            else if (item.type === 'attraction') { iconHtml = '<i class="fas fa-map-marker-alt text-blue-500 text-sm no-print"></i>'; typeColor = 'border-blue-400'; titlePrefix = '游玩'; }
+            else if (item.type === 'transport') { iconHtml = '<i class="fas fa-route text-green-500 text-sm no-print"></i>'; typeColor = 'border-green-400'; titlePrefix = '交通'; }
+            else if (item.type === 'accommodation') { iconHtml = '<i class="fas fa-bed text-purple-500 text-sm no-print"></i>'; typeColor = 'border-purple-400'; titlePrefix = '住宿'; }
+
+            let borderClass = `border-l-4 ${typeColor}`;
+            if (validations.hasConflict) borderClass = 'border-l-4 border-red-500 bg-red-50';
+            else if (validations.hasTimeWarning) borderClass = 'border-l-4 border-yellow-400 bg-yellow-50';
+
+            const timeHtml = `
+                <div class="flex items-center gap-1 md:gap-2">
+                    <div class="flex flex-col">
+                        <label class="text-[10px] md:text-xs text-gray-500 no-print">${item.type === 'accommodation' ? '入住时间' : '开始时间'}</label>
+                        <input type="time" value="${item.startTime}" class="item-input time-input p-1 border rounded bg-white font-mono text-xs md:text-sm" data-field="startTime">
+                    </div>
+                    <span class="text-gray-400 font-bold mt-3 md:mt-4">-</span>
+                    <div class="flex flex-col">
+                        <label class="text-[10px] md:text-xs text-gray-500 no-print">${item.type === 'accommodation' ? '退房时间' : '结束时间'}</label>
+                        <input type="time" value="${item.endTime}" class="item-input time-input p-1 border rounded bg-white font-mono text-xs md:text-sm" data-field="endTime">
+                    </div>
+                </div>
+            `;
+
+            let bodyHtml = '';
+
+            if (item.type === 'attraction' || item.type === 'restaurant') {
+                bodyHtml = `
+                    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                        <div class="flex-1 min-w-0 w-full">
+                            <label class="text-[10px] md:text-xs text-gray-500 no-print">${titlePrefix}名称</label>
+                            <div class="flex items-center gap-1">
+                                ${iconHtml}
+                                <input type="text" value="${item.name}" placeholder="请输入名称" class="item-input name-input w-full font-bold text-gray-800 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base" data-field="name">
+                            </div>
+                            <div class="text-[10px] md:text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                <input type="text" value="${item.city || ''}" placeholder="城市" class="item-input bg-gray-100 px-2 py-0.5 rounded w-16 focus:outline-none focus:bg-white focus:ring-1 focus:ring-blue-400" data-field="city">
+                                <span>时长: <input type="number" value="${item.recTime || 60}" class="item-input w-12 bg-transparent border-b border-gray-300 focus:outline-none focus:border-blue-500 text-center" data-field="recTime"> 分钟</span>
+                            </div>
+                        </div>
+                        <div class="w-full sm:w-auto flex justify-end">
+                            ${timeHtml}
+                        </div>
+                    </div>
+                    <textarea class="item-input w-full mt-2 text-xs md:text-sm text-gray-600 bg-transparent border-b border-dashed border-gray-200 focus:outline-none focus:border-blue-500" rows="1" placeholder="添加备注..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            } 
+            else if (item.type === 'transport') {
+                const mode = item.transportMode || 'transit';
+                const isTransit = mode === 'transit';
+                const isTaxi = mode === 'taxi';
+                const isWalking = mode === 'walking';
+                const isCycling = mode === 'cycling';
+                
+                let detailHtml = '';
+                if (isTransit) {
+                    detailHtml = `
+                        <div class="grid grid-cols-2 gap-x-3 gap-y-2 w-full text-[10px] md:text-xs mt-2 bg-green-50 p-2 md:p-3 rounded border border-green-100">
+                            <div class="col-span-2 flex gap-2">
+                                <div class="flex-1"><label class="text-gray-500 block">乘车线路</label><input type="text" placeholder="如: 地铁1号线" data-field="transitLine" value="${item.transitLine || ''}" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none"></div>
+                                <div class="w-20"><label class="text-gray-500 block">预估(分)</label><input type="number" placeholder="45" data-field="duration" value="${item.duration || ''}" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none"></div>
+                            </div>
+                            <div><label class="text-blue-600 block font-bold">起点站</label><input type="text" placeholder="上车站名" data-field="startStation" value="${item.startStation || ''}" class="item-input w-full border-b bg-transparent border-blue-200 focus:border-blue-500 focus:outline-none"></div>
+                            <div><label class="text-blue-500 block">进站出口</label><input type="text" placeholder="如: A口" data-field="startExit" value="${item.startExit || ''}" class="item-input w-full border-b bg-transparent border-blue-200 focus:border-blue-500 focus:outline-none"></div>
+                            
+                            <div class="col-span-2 border-t border-dashed border-green-200 my-1"></div>
+                            
+                            <div class="col-span-2"><label class="text-orange-500 block">转乘站(可选)</label><input type="text" placeholder="如: 换乘2号线" data-field="transferStation" value="${item.transferStation || ''}" class="item-input w-full border-b bg-transparent border-orange-200 focus:border-orange-500 focus:outline-none"></div>
+                            
+                            <div class="col-span-2 border-t border-dashed border-green-200 my-1"></div>
+                            
+                            <div><label class="text-red-600 block font-bold">终点站</label><input type="text" placeholder="下车站名" data-field="endStation" value="${item.endStation || ''}" class="item-input w-full border-b bg-transparent border-red-200 focus:border-red-500 focus:outline-none"></div>
+                            <div><label class="text-red-500 block">出站出口</label><input type="text" placeholder="如: C口" data-field="endExit" value="${item.endExit || ''}" class="item-input w-full border-b bg-transparent border-red-200 focus:border-red-500 focus:outline-none"></div>
+                        </div>
+                    `;
+                } else {
+                    let noteLabel = isTaxi ? '费用/备注' : '距离/备注';
+                    let startLabel = isTaxi ? '上车地点' : '起点';
+                    let endLabel = isTaxi ? '下车地点' : '终点';
+                    
+                    detailHtml = `
+                        <div class="grid grid-cols-2 gap-x-3 gap-y-2 w-full text-[10px] md:text-xs mt-2 bg-green-50 p-2 md:p-3 rounded border border-green-100">
+                            <div class="col-span-2 flex gap-2">
+                                <div class="w-1/2"><label class="text-blue-600 block font-bold">${startLabel}</label><input type="text" placeholder="出发地" data-field="startStation" value="${item.startStation || ''}" class="item-input w-full border-b bg-transparent border-blue-200 focus:border-blue-500 focus:outline-none"></div>
+                                <div class="w-1/2"><label class="text-red-600 block font-bold">${endLabel}</label><input type="text" placeholder="目的地" data-field="endStation" value="${item.endStation || ''}" class="item-input w-full border-b bg-transparent border-red-200 focus:border-red-500 focus:outline-none"></div>
+                            </div>
+                            <div>
+                                <label class="text-gray-500 block">预估用时(分钟)</label>
+                                <input type="number" placeholder="如: 30" class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none" data-field="duration" value="${item.duration || ''}">
+                            </div>
+                            <div>
+                                <label class="text-gray-500 block">${noteLabel}</label>
+                                <input type="text" placeholder="..." class="item-input w-full border-b bg-transparent border-gray-300 focus:border-green-500 focus:outline-none" data-field="cost" value="${item.cost || ''}">
+                            </div>
+                        </div>
+                    `;
+                }
+
+                bodyHtml = `
+                    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                        <div class="flex-1 min-w-0 w-full">
+                            <div class="flex items-center gap-2 mb-1">
+                                ${iconHtml}
+                                <select class="item-input font-bold text-green-700 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-green-500 text-sm md:text-base" data-field="transportMode">
+                                    <option value="transit" ${isTransit ? 'selected' : ''}>🚇 公共交通 (地铁/公交)</option>
+                                    <option value="taxi" ${isTaxi ? 'selected' : ''}>🚕 打车/网约车</option>
+                                    <option value="walking" ${isWalking ? 'selected' : ''}>🚶 步行</option>
+                                    <option value="cycling" ${isCycling ? 'selected' : ''}>🚲 骑行</option>
+                                </select>
+                            </div>
+                            ${detailHtml}
+                        </div>
+                        <div class="w-full sm:w-auto flex justify-end">
+                           ${timeHtml}
+                        </div>
+                    </div>
+                    <textarea class="item-input w-full mt-2 text-xs md:text-sm text-gray-600 bg-transparent border-b border-dashed border-gray-200 focus:outline-none focus:border-green-500" rows="1" placeholder="交通备忘录..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            }
+            else if (item.type === 'accommodation') {
+                bodyHtml = `
+                    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                        <div class="flex-1 min-w-0 w-full">
+                            <label class="text-[10px] md:text-xs text-gray-500 no-print">酒店/民宿名称</label>
+                            <div class="flex items-center gap-1">
+                                ${iconHtml}
+                                <input type="text" value="${item.name || ''}" placeholder="请输入住宿名称" class="item-input name-input w-full font-bold text-gray-800 bg-transparent border-b border-dashed border-gray-300 focus:outline-none focus:border-purple-500 text-sm md:text-base" data-field="name">
+                            </div>
+                            <div class="mt-2 flex items-center gap-2">
+                                <label class="text-[10px] md:text-xs text-purple-700 no-print bg-purple-100 px-2 py-0.5 rounded font-medium">💰 价格</label>
+                                <input type="text" value="${item.price || ''}" placeholder="如: ¥500/晚" class="item-input flex-1 border-b bg-transparent text-xs md:text-sm focus:outline-none focus:border-purple-500" data-field="price">
+                            </div>
+                        </div>
+                        <div class="w-full sm:w-auto flex justify-end">
+                            ${timeHtml}
+                        </div>
+                    </div>
+                    <textarea class="item-input w-full mt-2 text-xs md:text-sm text-gray-600 bg-purple-50 p-2 rounded border border-dashed border-purple-200 focus:outline-none focus:border-purple-500" rows="2" placeholder="备注栏 (填写房型、预订号等)..." data-field="desc">${item.desc || ''}</textarea>
+                `;
+            }
+
+            return `
+                <div class="border rounded p-3 md:p-4 shadow-sm ${borderClass} relative pl-8 md:pl-10 group bg-white print-page-break" data-item-id="${item.id}">
+                    <!-- 拖拽握把 (仅行程内显示) -->
+                    <div class="absolute left-0 top-0 bottom-0 w-6 md:w-8 flex items-center justify-center text-gray-300 hover:text-gray-600 cursor-move bg-gray-50 rounded-l border-r border-gray-100 transition no-print">
+                        <i class="fas fa-grip-vertical text-base md:text-lg"></i>
+                    </div>
+                    
+                    <button onclick="removeItineraryItem(${dayId}, '${item.id}')" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 no-print z-10 w-6 h-6 flex items-center justify-center">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                    ${bodyHtml}
+                    <!-- 警告提示区 -->
+                    <div class="mt-2 text-[10px] md:text-sm font-medium">
+                        ${validations.hasConflict ? `<div class="text-red-600"><i class="fas fa-exclamation-circle"></i> 错误：与本日其他行程发生时间冲突！不能重叠。</div>` : ''}
+                        ${validations.hasTimeWarning ? `<div class="text-yellow-600"><i class="fas fa-exclamation-triangle"></i> 提示：规划时间（${validations.actualTime}分钟）小于推荐时长（${item.recTime}分钟）的70%。</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        // ---------------- 核心逻辑：验证与处理 ----------------
+
+        function validateItem(dayId, item) {
+            const day = days.find(d => d.id === dayId);
+            let hasConflict = false;
+            let hasTimeWarning = false;
+            let actualTime = 0;
+
+            const startMins = timeToMins(item.startTime);
+            const endMins = timeToMins(item.endTime);
+
+            if (item.type === 'attraction' || item.type === 'restaurant') {
+                if (item.startTime && item.endTime && endMins > startMins) {
+                    actualTime = endMins - startMins;
+                    if (actualTime < item.recTime * 0.7) {
+                        hasTimeWarning = true;
+                    }
+                }
+            }
+
+            if (item.type !== 'accommodation' && item.startTime && item.endTime) {
+                day.items.forEach(otherItem => {
+                    if (otherItem.id === item.id) return; 
+                    if (otherItem.type === 'accommodation') return; 
+                    if (!otherItem.startTime || !otherItem.endTime) return;
+
+                    const oStart = timeToMins(otherItem.startTime);
+                    const oEnd = timeToMins(otherItem.endTime);
+
+                    if(endMins < startMins || oEnd < oStart) return;
+
+                    if (startMins < oEnd && endMins > oStart) {
+                        hasConflict = true;
+                    }
+                });
+            }
+
+            return { hasConflict, hasTimeWarning, actualTime };
+        }
+
+        function getDropPositionInfo(dayEl, clientY) {
+            const itemEls = [...dayEl.querySelectorAll('[data-item-id]:not(.dragging)')];
+            let prevItemEl = null;
+            
+            for (let el of itemEls) {
+                const box = el.getBoundingClientRect();
+                if (clientY > box.top + box.height / 2) {
+                    prevItemEl = el;
+                }
+            }
+            return prevItemEl ? prevItemEl.dataset.itemId : null;
+        }
+
+        function handlePoolDrop(targetDayId, poolItem, clientY) {
+            if (isItemUsed(poolItem.id)) {
+                alert('该项目已经在您的行程中了，不可重复添加！');
+                return;
+            }
+
+            const targetDay = days.find(d => d.id === targetDayId);
+            const dayEl = document.querySelector(`[data-day-id="${targetDayId}"]`);
+            
+            const prevItemId = getDropPositionInfo(dayEl, clientY);
+            let newStartTime = "09:00";
+            
+            if (prevItemId) {
+                const prevItem = targetDay.items.find(i => i.id === prevItemId);
+                if (prevItem && prevItem.endTime) {
+                    newStartTime = minsToTime(timeToMins(prevItem.endTime) + 10); 
+                }
+            } else if (targetDay.items.length > 0) {
+                 const firstItem = [...targetDay.items].sort((a,b) => timeToMins(a.startTime) - timeToMins(b.startTime))[0];
+                 if (firstItem && firstItem.startTime) {
+                     newStartTime = minsToTime(Math.max(0, timeToMins(firstItem.startTime) - poolItem.recTime - 10));
+                 }
+            }
+            
+            const startMins = timeToMins(newStartTime);
+            const endMins = startMins + poolItem.recTime;
+            const defaultEnd = minsToTime(endMins);
+
+            const newItem = {
+                id: generateId(),
+                poolId: poolItem.id,
+                type: poolItem.type || 'attraction',
+                name: poolItem.name,
+                city: poolItem.city,
+                recTime: poolItem.recTime,
+                desc: poolItem.desc,
+                startTime: newStartTime,
+                endTime: defaultEnd
+            };
+
+            targetDay.items.push(newItem);
+            renderItinerary();
+            renderPool(); 
+        }
+
+        function handleItineraryDrop(targetDayId, sourceData, clientY) {
+            const sourceDay = days.find(d => d.id === sourceData.dayId);
+            const targetDay = days.find(d => d.id === targetDayId);
+            const dayEl = document.querySelector(`[data-day-id="${targetDayId}"]`);
+            
+            const prevItemId = getDropPositionInfo(dayEl, clientY);
+            
+            sourceDay.items = sourceDay.items.filter(i => i.id !== sourceData.item.id);
+            
+            let newStartTime = "09:00";
+            const duration = timeToMins(sourceData.item.endTime) - timeToMins(sourceData.item.startTime);
+            
+            if (prevItemId) {
+                const prevItem = targetDay.items.find(i => i.id === prevItemId);
+                if (prevItem && prevItem.endTime) {
+                    newStartTime = minsToTime(timeToMins(prevItem.endTime) + 10); 
+                }
+            } else if (targetDay.items.length > 0) {
+                 const firstItem = [...targetDay.items].sort((a,b) => timeToMins(a.startTime) - timeToMins(b.startTime))[0];
+                 if (firstItem && firstItem.startTime) {
+                     newStartTime = minsToTime(Math.max(0, timeToMins(firstItem.startTime) - (duration > 0 ? duration : 30) - 10));
+                 }
+            } else {
+                 newStartTime = sourceData.item.startTime; 
+            }
+            
+            sourceData.item.startTime = newStartTime;
+            sourceData.item.endTime = minsToTime(timeToMins(newStartTime) + (duration > 0 ? duration : 30));
+            
+            targetDay.items.push(sourceData.item);
+            renderItinerary();
+            renderPool();
+        }
+
+        function addCustomAttraction(dayId) {
+            const day = days.find(d => d.id === dayId);
+            let defaultStart = "09:00";
+            
+            if (day.items.length > 0) {
+                const latestItem = [...day.items].sort((a, b) => timeToMins(b.endTime) - timeToMins(a.endTime))[0];
+                if (latestItem && latestItem.endTime) {
+                    defaultStart = minsToTime(timeToMins(latestItem.endTime) + 10); 
+                }
+            }
+            
+            day.items.push({
+                id: generateId(),
+                poolId: null, 
+                type: 'attraction',
+                name: '',
+                city: '',
+                recTime: 60,
+                desc: '',
+                startTime: defaultStart,
+                endTime: minsToTime(timeToMins(defaultStart) + 60)
+            });
+            renderItinerary();
+        }
+
+        function addTransport(dayId) {
+            const day = days.find(d => d.id === dayId);
+            let defaultStart = "08:00";
+            
+            if (day.items.length > 0) {
+                const latestItem = [...day.items].sort((a, b) => timeToMins(b.endTime) - timeToMins(a.endTime))[0];
+                if (latestItem && latestItem.endTime) {
+                    defaultStart = latestItem.endTime; 
+                }
+            }
+            
+            day.items.push({
+                id: generateId(),
+                type: 'transport',
+                transportMode: 'transit', 
+                startTime: defaultStart,
+                endTime: minsToTime(timeToMins(defaultStart) + 30),
+                duration: 30, 
+                transitLine: '', startStation: '', startExit: '', transferStation: '', endStation: '', endExit: '',
+                cost: '', desc: ''
+            });
+            renderItinerary();
+        }
+
+        function addAccommodation(dayId) {
+            const day = days.find(d => d.id === dayId);
+            day.items.push({
+                id: generateId(),
+                type: 'accommodation',
+                name: '',
+                price: '',
+                startTime: '20:00', 
+                endTime: '08:00',   
+                desc: ''
+            });
+            renderItinerary();
+        }
+
+        function bindItemEvents() {
+            document.querySelectorAll('.item-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const el = e.target;
+                    const field = el.dataset.field;
+                    const value = el.value;
+                    const itemEl = el.closest('[data-item-id]');
+                    const dayEl = el.closest('[data-day-id]');
+                    
+                    const itemId = itemEl.dataset.itemId;
+                    const dayId = parseInt(dayEl.dataset.dayId);
+                    
+                    const day = days.find(d => d.id === dayId);
+                    const item = day.items.find(i => i.id === itemId);
+                    
+                    if (item) {
+                        if (field === 'recTime' || field === 'duration') {
+                            item[field] = parseInt(value) || 0;
+                        } else {
+                            item[field] = value;
+                        }
+                        
+                        if (item.type !== 'accommodation') {
+                            if(field === 'startTime' && timeToMins(item.startTime) >= timeToMins(item.endTime)){
+                                 item.endTime = minsToTime(timeToMins(item.startTime) + (item.recTime || 30));
+                            }
+                            if(field === 'endTime' && timeToMins(item.endTime) <= timeToMins(item.startTime)){
+                                 item.startTime = minsToTime(Math.max(0, timeToMins(item.endTime) - (item.recTime || 30)));
+                            }
+                        }
+
+                        renderItinerary(); 
+                    }
+                });
+            });
+        }
+
+        // ---------------- 用户交互操作 ----------------
+
+        function addPoolItem(e) {
+            e.preventDefault();
+            const type = document.getElementById('p_type').value;
+            const name = document.getElementById('p_name').value;
+            const city = document.getElementById('p_city').value;
+            const time = parseInt(document.getElementById('p_time').value);
+            const desc = document.getElementById('p_desc').value;
+
+            pool.push({
+                id: generateId(),
+                type, name, city, recTime: time, desc
+            });
+
+            document.getElementById('addPoolForm').reset();
+            renderPool();
+        }
+
+        function removePoolItem(id) {
+            const index = pool.findIndex(item => item.id === id);
+            if (index > -1) {
+                const deletedItem = pool[index];
+                pool.splice(index, 1);
+                renderPool();
+                showUndoToast('pool', deletedItem, index);
+            }
+        }
+
+        function addDay() {
+            dayCounter++;
+            days.push({ id: dayCounter, items: [] });
+            renderItinerary();
+        }
+
+        function removeDay(id) {
+            if(confirm('确定要删除这一天及其所有行程吗？')) {
+                days = days.filter(day => day.id !== id);
+                renderItinerary();
+                renderPool(); 
+            }
+        }
+
+        function removeItineraryItem(dayId, itemId) {
+            const day = days.find(d => d.id === dayId);
+            if (!day) return;
+            
+            const index = day.items.findIndex(item => item.id === itemId);
+            if (index === -1) return;
+            
+            const item = day.items[index];
+
+            if (item.type === 'attraction' || item.type === 'restaurant') {
+                const existsInPool = pool.some(p => p.id === item.poolId);
+                // 新增判断：如果名称为空，则不弹窗，直接删除
+                const isEmpty = !item.name || item.name.trim() === '';
+                
+                if (!existsInPool && !isEmpty) {
+                    showCustomDeleteModal(dayId, item, index);
+                    return; 
+                }
+            }
+
+            const deletedItem = day.items.splice(index, 1)[0];
+            renderItinerary();
+            renderPool(); 
+            showUndoToast(dayId, deletedItem);
+        }
+
+        function showCustomDeleteModal(dayId, item, index) {
+            const modal = document.getElementById('customDeleteModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            
+            document.getElementById('modalItemName').textContent = item.name || '未命名项目';
+            
+            const btnYes = document.getElementById('btnModalYes');
+            const btnNo = document.getElementById('btnModalNo');
+            const btnCancel = document.getElementById('btnModalCancel');
+            
+            const newBtnYes = btnYes.cloneNode(true);
+            const newBtnNo = btnNo.cloneNode(true);
+            const newBtnCancel = btnCancel.cloneNode(true);
+            btnYes.parentNode.replaceChild(newBtnYes, btnYes);
+            btnNo.parentNode.replaceChild(newBtnNo, btnNo);
+            btnCancel.parentNode.replaceChild(newBtnCancel, btnCancel);
+            
+            const closeModal = () => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            };
+            
+            newBtnYes.addEventListener('click', () => {
+                const day = days.find(d => d.id === dayId);
+                const deletedItem = day.items.splice(index, 1)[0];
+                
+                const newPoolId = generateId();
+                pool.push({
+                    id: newPoolId,
+                    type: deletedItem.type,
+                    name: deletedItem.name || '未命名',
+                    city: deletedItem.city || '未知',
+                    recTime: deletedItem.recTime || 60,
+                    desc: deletedItem.desc || ''
+                });
+                
+                renderItinerary();
+                renderPool();
+                closeModal();
+            });
+            
+            newBtnNo.addEventListener('click', () => {
+                const day = days.find(d => d.id === dayId);
+                const deletedItem = day.items.splice(index, 1)[0];
+                renderItinerary();
+                showUndoToast(dayId, deletedItem);
+                closeModal();
+            });
+            
+            newBtnCancel.addEventListener('click', () => {
+                closeModal();
+            });
+        }
+
+        function showUndoToast(targetId, deletedItem, originalIndex) {
+            const container = document.getElementById('toastContainer');
+            
+            container.innerHTML = '';
+            if (toastTimeout) clearTimeout(toastTimeout);
+            
+            const toast = document.createElement('div');
+            toast.className = 'bg-gray-800 text-white px-4 py-3 rounded shadow-lg flex items-center justify-between gap-4 toast-enter min-w-[280px] md:min-w-[300px] border-l-4 border-blue-500 mb-2';
+            
+            let itemName = deletedItem.name || (deletedItem.type === 'transport' ? '交通规划' : '住宿安排');
+            toast.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-info-circle text-blue-400"></i>
+                    <span class="text-xs md:text-sm">已删除: <span class="font-bold truncate max-w-[100px] inline-block align-bottom">${itemName}</span></span>
+                </div>
+                <button id="undoBtn" class="text-blue-400 hover:text-white font-bold text-xs md:text-sm px-3 py-1.5 rounded bg-gray-700 hover:bg-blue-600 transition shrink-0">
+                    <i class="fas fa-undo mr-1"></i>撤销
+                </button>
+            `;
+            
+            container.appendChild(toast);
+            
+            toast.querySelector('#undoBtn').addEventListener('click', () => {
+                if (targetId === 'pool') {
+                    if (originalIndex !== undefined && originalIndex <= pool.length) {
+                        pool.splice(originalIndex, 0, deletedItem); 
+                    } else {
+                        pool.push(deletedItem);
+                    }
+                    renderPool();
+                } else {
+                    const day = days.find(d => d.id === targetId);
+                    if (day) {
+                        day.items.push(deletedItem); 
+                        renderItinerary();
+                        renderPool(); 
+                    }
+                }
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+                if (toastTimeout) clearTimeout(toastTimeout);
+            });
+            
+            toastTimeout = setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(20px)';
+                toast.style.transition = 'all 0.3s ease-out';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        // ---------------- XML 导入导出功能 ----------------
+        
+        function exportPoolXML() {
+            let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<pool>\n';
+            pool.forEach(item => {
+                xml += `  <item>\n`;
+                xml += `    <id>${item.id}</id>\n`;
+                xml += `    <type>${item.type}</type>\n`;
+                xml += `    <name>${escapeXML(item.name)}</name>\n`;
+                xml += `    <city>${escapeXML(item.city)}</city>\n`;
+                xml += `    <recommendedTime>${item.recTime}</recommendedTime>\n`;
+                xml += `    <description>${escapeXML(item.desc)}</description>\n`;
+                xml += `  </item>\n`;
+            });
+            xml += '</pool>';
+
+            const blob = new Blob([xml], { type: 'application/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '我的行程池.xml';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportXML() {
+            let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<travel_plan>\n';
+
+            xml += '  <pool>\n';
+            pool.forEach(item => {
+                xml += `    <item>\n`;
+                xml += `      <id>${item.id}</id>\n`;
+                xml += `      <type>${item.type}</type>\n`;
+                xml += `      <name>${escapeXML(item.name)}</name>\n`;
+                xml += `      <city>${escapeXML(item.city)}</city>\n`;
+                xml += `      <recommendedTime>${item.recTime}</recommendedTime>\n`;
+                xml += `      <description>${escapeXML(item.desc)}</description>\n`;
+                xml += `    </item>\n`;
+            });
+            xml += '  </pool>\n';
+
+            xml += '  <itinerary>\n';
+            days.forEach(day => {
+                xml += `    <day id="${day.id}">\n`;
+                day.items.forEach(item => {
+                    xml += `      <schedule_item>\n`;
+                    for (const key in item) {
+                        xml += `        <${key}>${escapeXML(item[key])}</${key}>\n`;
+                    }
+                    xml += `      </schedule_item>\n`;
+                });
+                xml += `    </day>\n`;
+            });
+            xml += '  </itinerary>\n';
+            xml += '</travel_plan>';
+
+            const blob = new Blob([xml], { type: 'application/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '我的旅行规划.xml';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function importXML(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const text = e.target.result;
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(text, "text/xml");
+                    
+                    if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
+                        alert("XML格式错误，请检查文件。");
+                        return;
+                    }
+
+                    const isFullPlan = xmlDoc.querySelector('travel_plan');
+                    if (isFullPlan) {
+                        if (!confirm("检测到完整的行程规划文件！导入将覆盖当前的所有进度，是否继续？")) {
+                            document.getElementById('xmlUpload').value = '';
+                            return;
+                        }
+
+                        pool = [];
+                        xmlDoc.querySelectorAll('pool > item').forEach(node => {
+                            pool.push({
+                                id: node.querySelector("id")?.textContent || generateId(),
+                                type: node.querySelector("type")?.textContent || 'attraction',
+                                name: node.querySelector("name")?.textContent || '未命名',
+                                city: node.querySelector("city")?.textContent || '',
+                                recTime: parseInt(node.querySelector("recommendedTime")?.textContent) || 60,
+                                desc: node.querySelector("description")?.textContent || ''
+                            });
+                        });
+
+                        days = [];
+                        let maxDayId = 0;
+                        xmlDoc.querySelectorAll('itinerary > day').forEach(dayNode => {
+                            const dId = parseInt(dayNode.getAttribute('id')) || (++maxDayId);
+                            if (dId > maxDayId) maxDayId = dId;
+                            
+                            const dayItems = [];
+                            dayNode.querySelectorAll('schedule_item').forEach(itemNode => {
+                                const itemObj = {};
+                                itemNode.childNodes.forEach(child => {
+                                    if (child.nodeType === 1) { 
+                                        itemObj[child.nodeName] = child.textContent;
+                                    }
+                                });
+                                if (itemObj.recTime) itemObj.recTime = parseInt(itemObj.recTime);
+                                if (itemObj.duration) itemObj.duration = parseInt(itemObj.duration);
+                                dayItems.push(itemObj);
+                            });
+                            days.push({ id: dId, items: dayItems });
+                        });
+                        
+                        dayCounter = maxDayId || 1;
+                        if (days.length === 0) days.push({ id: 1, items: [] });
+
+                        alert("完整行程规划恢复成功！");
+                        renderPool();
+                        renderItinerary();
+                    } 
+                    else {
+                        const items = xmlDoc.querySelectorAll("item, attraction"); 
+                        let addedCount = 0;
+
+                        items.forEach(node => {
+                            const name = node.querySelector("name")?.textContent || "未命名";
+                            const city = node.querySelector("city")?.textContent || "未知";
+                            const timeStr = node.querySelector("recommendedTime")?.textContent || "60";
+                            const desc = node.querySelector("description")?.textContent || "";
+                            
+                            let type = 'attraction';
+                            if (node.tagName.toLowerCase() === 'restaurant' || desc.includes('美食') || desc.includes('餐饮') || desc.includes('餐厅')) {
+                                type = 'restaurant';
+                            } else if (node.querySelector("type")) {
+                                const xmlType = node.querySelector("type").textContent;
+                                if (xmlType === 'restaurant' || xmlType === '餐饮' || xmlType === '餐厅') type = 'restaurant';
+                            }
+                            
+                            pool.push({
+                                id: generateId(),
+                                type: type,
+                                name: name,
+                                city: city,
+                                recTime: parseInt(timeStr) || 60,
+                                desc: desc
+                            });
+                            addedCount++;
+                        });
+
+                        alert(`成功导入 ${addedCount} 个项目！`);
+                        renderPool();
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("导入失败，XML文件解析异常。");
+                }
+                document.getElementById('xmlUpload').value = '';
+            };
+            reader.readAsText(file);
+        }
+
+        // 初始化
+        renderPool();
+        renderItinerary();
+
+    </script>
+
+    <!-- 撤销提示框容器 -->
+    <div id="toastContainer" class="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex flex-col gap-2 no-print"></div>
+
+    <!-- 自定义项目删除确认模态框 -->
+    <div id="customDeleteModal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50 backdrop-blur-sm no-print p-4">
+        <div class="bg-white rounded-xl p-5 md:p-6 max-w-sm w-full shadow-2xl modal-enter border border-gray-100">
+            <div class="flex items-center gap-3 mb-4 text-amber-500">
+                <i class="fas fa-question-circle text-2xl md:text-3xl"></i>
+                <h3 class="text-lg md:text-xl font-bold text-gray-800">保存到行程池？</h3>
+            </div>
+            <p class="text-gray-600 text-xs md:text-sm mb-6 leading-relaxed">
+                您正在删除的 <span id="modalItemName" class="font-bold text-blue-600"></span> 并不在左侧的行程池中。是否需要将其加入池子，以便后续重新规划时使用？
+            </p>
+            <div class="flex flex-col gap-3">
+                <button id="btnModalYes" class="bg-blue-500 text-white px-4 py-2.5 rounded-lg hover:bg-blue-600 transition font-medium flex justify-center items-center text-sm">
+                    <i class="fas fa-arrow-left mr-2"></i> 是 (删除并加入池子)
+                </button>
+                <button id="btnModalNo" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2.5 rounded-lg hover:bg-red-100 transition font-medium text-sm">
+                    否 (直接删除)
+                </button>
+                <button id="btnModalCancel" class="bg-gray-100 text-gray-700 px-4 py-2.5 rounded-lg hover:bg-gray-200 transition font-medium text-sm">
+                    取消
+                </button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
